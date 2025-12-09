@@ -2,8 +2,35 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import 'calculators.dart';
+import 'i18n.dart';
+import 'widgets.dart';
+
+enum Country { china, japan }
+
 void main() {
   runApp(const SalaryApp());
+}
+
+class _MonthControllers {
+  _MonthControllers({
+    required this.salary,
+    required this.socialBase,
+    required this.fundBase,
+    required this.extraDeduction,
+  });
+
+  final TextEditingController salary;
+  final TextEditingController socialBase;
+  final TextEditingController fundBase;
+  final TextEditingController extraDeduction;
+
+  void dispose() {
+    salary.dispose();
+    socialBase.dispose();
+    fundBase.dispose();
+    extraDeduction.dispose();
+  }
 }
 
 class SalaryApp extends StatelessWidget {
@@ -39,11 +66,18 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
   final _housingFundRateController = TextEditingController(text: '12');
   final _standardDeductionController = TextEditingController(text: '5000');
   final _extraDeductionController = TextEditingController(text: '0');
+  final _jpAnnualSalaryController = TextEditingController(text: '6000000');
+  final _jpAgeController = TextEditingController(text: '30');
+  final _jpDependentsController = TextEditingController(text: '0');
 
   late final List<_MonthControllers> _monthControllers;
   bool _useCumulative = false;
   int _calcToMonth = DateTime.now().month;
   bool _monthsExpanded = true;
+  Country _country = Country.china;
+  bool _jpHasSpouse = false;
+  bool _jpIsFirstYear = true;
+  AppLocale _locale = AppLocale.zh;
 
   double _gross = 0;
   double _taxableIncome = 0;
@@ -51,6 +85,7 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
   double _net = 0;
   double _cumulativeTax = 0;
   double _cumulativeTaxable = 0;
+  double _residentTax = 0;
 
   double _pension = 0;
   double _medical = 0;
@@ -83,6 +118,9 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
     _housingFundRateController.dispose();
     _standardDeductionController.dispose();
     _extraDeductionController.dispose();
+    _jpAnnualSalaryController.dispose();
+    _jpAgeController.dispose();
+    _jpDependentsController.dispose();
     for (final month in _monthControllers) {
       month.dispose();
     }
@@ -90,151 +128,96 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
   }
 
   void _calculate() {
+    if (_country == Country.japan) {
+      _calculateJapan();
+    } else {
+      _calculateChina();
+    }
+  }
+
+  void _calculateChina() {
     final salary = _parse(_salaryController.text, 0);
     final socialBase = _parse(_socialBaseController.text, salary);
     final fundBase = _parse(_fundBaseController.text, socialBase);
 
-    final pensionRate = _parse(_pensionRateController.text, 8) / 100;
-    final medicalRate = _parse(_medicalRateController.text, 2) / 100;
-    final unemploymentRate =
-        _parse(_unemploymentRateController.text, 0.5) / 100;
-    final housingFundRate =
-        _parse(_housingFundRateController.text, 12) / 100;
+    final params = ChinaCalcParams(
+      salary: salary,
+      socialBase: socialBase,
+      fundBase: fundBase,
+      pensionRate: _parse(_pensionRateController.text, 8) / 100,
+      medicalRate: _parse(_medicalRateController.text, 2) / 100,
+      unemploymentRate: _parse(_unemploymentRateController.text, 0.5) / 100,
+      housingFundRate: _parse(_housingFundRateController.text, 12) / 100,
+      standardDeduction: _parse(_standardDeductionController.text, 5000),
+      extraDeduction: _parse(_extraDeductionController.text, 0),
+      useCumulative: _useCumulative,
+      targetMonth: _calcToMonth,
+      months: List.generate(
+        12,
+        (i) => MonthValue(
+          salary: _parse(_monthControllers[i].salary.text, salary),
+          socialBase: _parse(_monthControllers[i].socialBase.text, socialBase),
+          fundBase: _parse(_monthControllers[i].fundBase.text, fundBase),
+          extra: _parse(_monthControllers[i].extraDeduction.text, 0),
+        ),
+      ),
+    );
 
-    final standardDeduction = _parse(_standardDeductionController.text, 5000);
-    final extraDeduction = _parse(_extraDeductionController.text, 0);
-
-    if (_useCumulative) {
-      final targetMonth = _calcToMonth.clamp(1, 12);
-      double cumulativeIncome = 0;
-      double cumulativeInsurance = 0;
-      double cumulativeExtra = 0;
-      double cumulativeTaxable = 0;
-
-      double currentSalary = salary;
-      double currentInsurance = 0;
-      double currentPension = 0;
-      double currentMedical = 0;
-      double currentUnemployment = 0;
-      double currentHousingFund = 0;
-      double currentMonthTaxable = 0;
-
-      final List<double> cumulativeTaxList = [];
-
-      for (int i = 0; i < targetMonth; i++) {
-        final data = _monthControllers[i];
-        final mSalary = _parse(data.salary.text, salary);
-        final mSocial = _parse(data.socialBase.text, mSalary);
-        final mFund = _parse(data.fundBase.text, mSocial);
-        final mExtra = _parse(data.extraDeduction.text, 0);
-
-        final mPension = mSocial * pensionRate;
-        final mMedical = mSocial * medicalRate;
-        final mUnemployment = mSocial * unemploymentRate;
-        final mHousingFund = mFund * housingFundRate;
-        final mInsurance = mPension + mMedical + mUnemployment + mHousingFund;
-
-        cumulativeIncome += mSalary;
-        cumulativeInsurance += mInsurance;
-        cumulativeExtra += mExtra;
-
-        cumulativeTaxable = cumulativeIncome -
-            cumulativeInsurance -
-            cumulativeExtra -
-            standardDeduction * (i + 1);
-        if (cumulativeTaxable < 0) cumulativeTaxable = 0;
-
-        final taxTillNow = _round2(_calcTax(cumulativeTaxable, cumulative: true));
-        cumulativeTaxList.add(taxTillNow);
-
-        if (i == targetMonth - 1) {
-          currentSalary = mSalary;
-          currentInsurance = mInsurance;
-          currentPension = mPension;
-          currentMedical = mMedical;
-          currentUnemployment = mUnemployment;
-          currentHousingFund = mHousingFund;
-          double monthTaxable = mSalary - mInsurance - mExtra - standardDeduction;
-          if (monthTaxable < 0) monthTaxable = 0;
-          currentMonthTaxable = monthTaxable;
-        }
-      }
-
-      final double cumulativeTax = cumulativeTaxList.isNotEmpty ? cumulativeTaxList.last : 0.0;
-      final double prevCumulativeTax =
-          cumulativeTaxList.length > 1 ? cumulativeTaxList[cumulativeTaxList.length - 2] : 0.0;
-      final double monthTax = _round2(
-          (cumulativeTax - prevCumulativeTax).clamp(0, double.infinity).toDouble());
-      final net = currentSalary - currentInsurance - monthTax;
-
-      setState(() {
-        _gross = currentSalary;
-        _pension = currentPension;
-        _medical = currentMedical;
-        _unemployment = currentUnemployment;
-        _housingFund = currentHousingFund;
-        _taxableIncome = currentMonthTaxable;
-        _tax = monthTax;
-        _net = net;
-        _cumulativeTax = cumulativeTax;
-        _cumulativeTaxable = cumulativeTaxable;
-      });
-    } else {
-      final pension = socialBase * pensionRate;
-      final medical = socialBase * medicalRate;
-      final unemployment = socialBase * unemploymentRate;
-      final housingFund = fundBase * housingFundRate;
-      final insuranceTotal = pension + medical + unemployment + housingFund;
-
-      double taxableIncome =
-          salary - insuranceTotal - standardDeduction - extraDeduction;
-      if (taxableIncome < 0) taxableIncome = 0;
-      final tax = _round2(_calcTax(taxableIncome, cumulative: false));
-      final net = salary - insuranceTotal - tax;
-
-      setState(() {
-        _gross = salary;
-        _pension = pension;
-        _medical = medical;
-        _unemployment = unemployment;
-        _housingFund = housingFund;
-        _taxableIncome = taxableIncome;
-        _tax = tax;
-        _net = net;
-        _cumulativeTax = tax;
-        _cumulativeTaxable = taxableIncome;
-      });
-    }
+    final result = calcChina(params);
+    setState(() {
+      _gross = result.gross;
+      _pension = result.pension;
+      _medical = result.medical;
+      _unemployment = result.unemployment;
+      _housingFund = result.housing;
+      _taxableIncome = result.taxable;
+      _tax = result.tax;
+      _net = result.net;
+      _cumulativeTax = result.cumulativeTax;
+      _cumulativeTaxable = result.cumulativeTaxable;
+      _residentTax = result.residentTax;
+    });
   }
 
-  double _calcTax(double taxableIncome, {required bool cumulative}) {
-    final brackets = cumulative
-        ? const <_TaxBracket>[
-            _TaxBracket(36000, 0.03, 0),
-            _TaxBracket(144000, 0.10, 2520),
-            _TaxBracket(300000, 0.20, 16920),
-            _TaxBracket(420000, 0.25, 31920),
-            _TaxBracket(660000, 0.30, 52920),
-            _TaxBracket(960000, 0.35, 85920),
-            _TaxBracket(double.infinity, 0.45, 181920),
-          ]
-        : const <_TaxBracket>[
-            _TaxBracket(3000, 0.03, 0),
-            _TaxBracket(12000, 0.10, 210),
-            _TaxBracket(25000, 0.20, 1410),
-            _TaxBracket(35000, 0.25, 2660),
-            _TaxBracket(55000, 0.30, 4410),
-            _TaxBracket(80000, 0.35, 7160),
-            _TaxBracket(double.infinity, 0.45, 15160),
-          ];
+  void _calculateJapan() {
+    final params = JapanCalcParams(
+      grossAnnual: _parse(_jpAnnualSalaryController.text, 0),
+      age: _parse(_jpAgeController.text, 30).round(),
+      dependents: _parse(_jpDependentsController.text, 0).round(),
+      hasSpouse: _jpHasSpouse,
+      isFirstYear: _jpIsFirstYear,
+    );
 
-    for (final bracket in brackets) {
-      if (taxableIncome <= bracket.limit) {
-        final tax = taxableIncome * bracket.rate - bracket.quickDeduction;
-        return tax < 0 ? 0.0 : tax;
-      }
-    }
-    return 0.0;
+    final result = calcJapan(params);
+    setState(() {
+      _gross = result.gross;
+      _pension = result.pension;
+      _medical = result.medical;
+      _unemployment = result.unemployment;
+      _housingFund = result.housing;
+      _taxableIncome = result.taxable;
+      _tax = result.tax;
+      _net = result.net;
+      _cumulativeTax = result.cumulativeTax;
+      _cumulativeTaxable = result.cumulativeTaxable;
+      _residentTax = result.residentTax;
+    });
+  }
+
+  void _resetResults() {
+    setState(() {
+      _gross = 0;
+      _pension = 0;
+      _medical = 0;
+      _unemployment = 0;
+      _housingFund = 0;
+      _taxableIncome = 0;
+      _tax = 0;
+      _net = 0;
+      _cumulativeTax = 0;
+      _cumulativeTaxable = 0;
+      _residentTax = 0;
+    });
   }
 
   void _fillMonthsFromTop() {
@@ -271,10 +254,9 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
 
   String _format(double value) => value.toStringAsFixed(2);
 
-  double _round2(double value) => (value * 100).roundToDouble() / 100;
-
   @override
   Widget build(BuildContext context) {
+    final strings = Strings(_locale);
     final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7F4),
@@ -282,9 +264,9 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
         elevation: 0,
         backgroundColor: Colors.transparent,
         centerTitle: true,
-        title: const Text(
-          '工资计算器',
-          style: TextStyle(fontWeight: FontWeight.w700),
+        title: Text(
+          strings.t('app_title'),
+          style: const TextStyle(fontWeight: FontWeight.w700),
         ),
       ),
       body: SafeArea(
@@ -305,117 +287,176 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
                   children: [
                     SizedBox(
                       width: contentWidth,
-                      child: _sectionCard(
-                        title: '计算模式',
+                      child: SectionCard(
+                        title: strings.t('country'),
                         children: [
-                          SegmentedButton<bool>(
-                            segments: const [
-                              ButtonSegment(value: false, label: Text('单月估算')),
-                              ButtonSegment(value: true, label: Text('累计预扣（全年）')),
+                          Row(
+                            children: [
+                              DropdownButton<Country>(
+                                value: _country,
+                                items: [
+                                  DropdownMenuItem(
+                                    value: Country.china,
+                                    child: Text(strings.t('china')),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: Country.japan,
+                                    child: Text(strings.t('japan')),
+                                  ),
+                                ],
+                                onChanged: (v) {
+                                  if (v == null) return;
+                                  setState(() {
+                                    _country = v;
+                                    _useCumulative = _country == Country.china && _useCumulative;
+                                    _resetResults();
+                                  });
+                                },
+                              ),
+                              const SizedBox(width: 16),
+                              DropdownButton<AppLocale>(
+                                value: _locale,
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: AppLocale.zh,
+                                    child: Text('中文'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: AppLocale.en,
+                                    child: Text('English'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: AppLocale.jp,
+                                    child: Text('日本語'),
+                                  ),
+                                ],
+                                onChanged: (v) {
+                                  if (v == null) return;
+                                  setState(() => _locale = v);
+                                },
+                              ),
                             ],
-                            selected: {_useCumulative},
-                            onSelectionChanged: (value) {
-                              setState(() {
-                                _useCumulative = value.first;
-                              });
-                              if (value.first) {
-                                _fillMonthsFromTop();
-                              }
-                            },
-                          ),
-                          if (_useCumulative) ...[
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                const Text('计算到月份'),
-                                const SizedBox(width: 12),
-                                DropdownButton<int>(
-                                  value: _calcToMonth,
+                          )
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (_country == Country.china) ...[
+                      SizedBox(
+                        width: contentWidth,
+                        child: SectionCard(
+                          title: strings.t('mode'),
+                          children: [
+                            SegmentedButton<bool>(
+                              segments: [
+                                ButtonSegment(value: false, label: Text(strings.t('monthly'))),
+                                ButtonSegment(value: true, label: Text(strings.t('cumulative'))),
+                              ],
+                              selected: {_useCumulative},
+                              onSelectionChanged: (value) {
+                                setState(() {
+                                  _useCumulative = value.first;
+                                });
+                                if (value.first) {
+                                  _fillMonthsFromTop();
+                                }
+                              },
+                            ),
+                            if (_useCumulative) ...[
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Text(strings.t('calc_to_month')),
+                                  const SizedBox(width: 12),
+                                  DropdownButton<int>(
+                                    value: _calcToMonth,
                                   items: List.generate(
                                     12,
                                     (index) => DropdownMenuItem(
                                       value: index + 1,
-                                      child: Text('${index + 1}月'),
+                                      child: Text(_locale == AppLocale.zh
+                                          ? '${index + 1}月'
+                                          : 'Month ${index + 1}'),
                                     ),
                                   ),
-                                  onChanged: (v) {
+                                    onChanged: (v) {
                                     if (v != null) {
                                       setState(() => _calcToMonth = v);
-                                    }
-                                  },
-                                ),
-                                const SizedBox(width: 12),
-                                const Expanded(
-                                  child: Text(
-                                    '累计预扣按当年1月至所选月份的累计收入、专项附加及五险一金计算',
-                                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                                      }
+                                    },
                                   ),
-                                ),
-                              ],
-                            ),
+                                  const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    strings.t('cumulative_tip'),
+                                    style: const TextStyle(fontSize: 12, color: Colors.black54),
+                                  ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: contentWidth,
-                      child: _sectionCard(
-                        title: '收入与基数',
-                        children: [
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            children: [
-                              _fieldBox(
-                                LabeledNumberField(
-                                  label: '税前工资 (元/月)',
-                                  controller: _salaryController,
-                                  suffix: '元',
-                                ),
-                                fieldWidth,
-                              ),
-                              _fieldBox(
-                                LabeledNumberField(
-                                  label: '社保基数 (默认=工资)',
-                                  controller: _socialBaseController,
-                                  suffix: '元',
-                                ),
-                                fieldWidth,
-                              ),
-                              _fieldBox(
-                                LabeledNumberField(
-                                  label: '公积金基数 (默认=社保基数)',
-                                  controller: _fundBaseController,
-                                  suffix: '元',
-                                ),
-                                fieldWidth,
-                              ),
-                              if (_useCumulative)
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: contentWidth,
+                        child: SectionCard(
+                          title: strings.t('income_basis'),
+                          children: [
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: [
                                 _fieldBox(
                                   LabeledNumberField(
-                                    label: '专项附加/其他扣除 (默认填充月度)',
-                                    controller: _extraDeductionController,
+                                    label: strings.t('salary_monthly'),
+                                    controller: _salaryController,
                                     suffix: '元',
-                                    helper: '用于一键填充月度专项附加',
                                   ),
                                   fieldWidth,
                                 ),
-                            ],
-                          ),
-                        ],
+                                _fieldBox(
+                                  LabeledNumberField(
+                                    label: strings.t('social_base'),
+                                    controller: _socialBaseController,
+                                    suffix: '元',
+                                  ),
+                                  fieldWidth,
+                                ),
+                                _fieldBox(
+                                  LabeledNumberField(
+                                    label: strings.t('fund_base'),
+                                    controller: _fundBaseController,
+                                    suffix: '元',
+                                  ),
+                                  fieldWidth,
+                                ),
+                                if (_useCumulative)
+                                  _fieldBox(
+                                    LabeledNumberField(
+                                      label: strings.t('extra_fill'),
+                                      controller: _extraDeductionController,
+                                      suffix: '元',
+                                      helper: strings.t('extra_fill_help'),
+                                    ),
+                                    fieldWidth,
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (_useCumulative)
-                      SizedBox(
-                        width: contentWidth,
-                        child: _sectionCard(
-                          title: '月度明细（可覆盖调整）',
+                      const SizedBox(height: 12),
+                      if (_useCumulative)
+                        SizedBox(
+                          width: contentWidth,
+                        child: SectionCard(
+                          title: strings.t('monthly_detail'),
                           children: [
-                            const Text(
-                              '默认使用上方基数/工资，遇到涨薪或专项扣除变化时修改对应月份。',
-                              style: TextStyle(fontSize: 12, color: Colors.black54),
+                            Text(
+                              strings.t('monthly_tip'),
+                              style: const TextStyle(fontSize: 12, color: Colors.black54),
                             ),
                             const SizedBox(height: 8),
                             Row(
@@ -423,7 +464,7 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
                               children: [
                                 TextButton(
                                   onPressed: _fillMonthsFromTop,
-                                  child: const Text('一键填充为上方输入'),
+                                  child: Text(strings.t('fill_all')),
                                 ),
                                 TextButton.icon(
                                   onPressed: () {
@@ -432,147 +473,220 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
                                     });
                                   },
                                   icon: Icon(_monthsExpanded ? Icons.expand_less : Icons.expand_more),
-                                  label: Text(_monthsExpanded ? '收起' : '展开'),
+                                  label: Text(_monthsExpanded
+                                      ? strings.t('collapse')
+                                      : strings.t('expand')),
                                 ),
                               ],
                             ),
-                            if (_monthsExpanded) ...[
-                              const SizedBox(height: 12),
-                              ...List.generate(
-                                _calcToMonth,
-                                (index) => Padding(
-                                  padding: const EdgeInsets.only(bottom: 12),
-                                  child: _monthRow(index, contentWidth),
+                              if (_monthsExpanded) ...[
+                                const SizedBox(height: 12),
+                                ...List.generate(
+                                  _calcToMonth,
+                                  (index) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: _monthRow(index, contentWidth),
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    if (_useCumulative) const SizedBox(height: 12),
-                    SizedBox(
-                      width: contentWidth,
-                      child: _sectionCard(
-                        title: '个人缴费比例',
-                        children: [
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            children: [
-                              _fieldBox(
-                                LabeledNumberField(
-                                  label: '养老',
-                                  controller: _pensionRateController,
-                                  suffix: '%',
-                                ),
-                                fieldWidth,
-                              ),
-                              _fieldBox(
-                                LabeledNumberField(
-                                  label: '医疗',
-                                  controller: _medicalRateController,
-                                  suffix: '%',
-                                ),
-                                fieldWidth,
-                              ),
-                              _fieldBox(
-                                LabeledNumberField(
-                                  label: '失业',
-                                  controller: _unemploymentRateController,
-                                  suffix: '%',
-                                ),
-                                fieldWidth,
-                              ),
-                              _fieldBox(
-                                LabeledNumberField(
-                                  label: '公积金',
-                                  controller: _housingFundRateController,
-                                  suffix: '%',
-                                ),
-                                fieldWidth,
-                              ),
+                              ],
                             ],
                           ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: contentWidth,
-                      child: _sectionCard(
-                        title: '扣除项',
-                        children: [
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            children: [
-                              _fieldBox(
-                                LabeledNumberField(
-                                  label: '起征额/基础扣除',
-                                  controller: _standardDeductionController,
-                                  suffix: '元',
-                                ),
-                                fieldWidth,
-                              ),
-                              if (!_useCumulative)
+                        ),
+                      if (_useCumulative) const SizedBox(height: 12),
+                      SizedBox(
+                        width: contentWidth,
+                        child: SectionCard(
+                          title: strings.t('personal_ratio'),
+                          children: [
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: [
                                 _fieldBox(
                                   LabeledNumberField(
-                                    label: '专项附加/其他扣除',
-                                    controller: _extraDeductionController,
-                                    suffix: '元',
-                                    helper: '如子女教育、住房租金等月度扣除总额',
+                                    label: strings.t('pension'),
+                                    controller: _pensionRateController,
+                                    suffix: '%',
                                   ),
                                   fieldWidth,
                                 ),
-                            ],
-                          ),
-                        ],
+                                _fieldBox(
+                                  LabeledNumberField(
+                                    label: strings.t('medical'),
+                                    controller: _medicalRateController,
+                                    suffix: '%',
+                                  ),
+                                  fieldWidth,
+                                ),
+                                _fieldBox(
+                                  LabeledNumberField(
+                                    label: strings.t('unemployment'),
+                                    controller: _unemploymentRateController,
+                                    suffix: '%',
+                                  ),
+                                  fieldWidth,
+                                ),
+                                _fieldBox(
+                                  LabeledNumberField(
+                                    label: strings.t('housing'),
+                                    controller: _housingFundRateController,
+                                    suffix: '%',
+                                  ),
+                                  fieldWidth,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: contentWidth,
+                        child: SectionCard(
+                          title: strings.t('deduction'),
+                          children: [
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: [
+                                _fieldBox(
+                                  LabeledNumberField(
+                                    label: strings.t('standard'),
+                                    controller: _standardDeductionController,
+                                    suffix: '元',
+                                  ),
+                                  fieldWidth,
+                                ),
+                                if (!_useCumulative)
+                                  _fieldBox(
+                                    LabeledNumberField(
+                                      label: strings.t('extra'),
+                                      controller: _extraDeductionController,
+                                      suffix: '元',
+                                      helper: strings.t('extra_help'),
+                                    ),
+                                    fieldWidth,
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
+                      SizedBox(
+                        width: contentWidth,
+                        child: SectionCard(
+                          title: strings.t('jpn_basic'),
+                          children: [
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: [
+                                _fieldBox(
+                                  LabeledNumberField(
+                                    label: strings.t('jpn_income'),
+                                    controller: _jpAnnualSalaryController,
+                                    suffix: '¥',
+                                  ),
+                                  fieldWidth,
+                                ),
+                                _fieldBox(
+                                  LabeledNumberField(
+                                    label: strings.t('age'),
+                                    controller: _jpAgeController,
+                                    suffix: '',
+                                  ),
+                                  fieldWidth,
+                                ),
+                                _fieldBox(
+                                  LabeledNumberField(
+                                    label: strings.t('dependents'),
+                                    controller: _jpDependentsController,
+                                  ),
+                                  fieldWidth,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: [
+                                FilterChip(
+                                  label: Text(strings.t('spouse')),
+                                  selected: _jpHasSpouse,
+                                  onSelected: (v) => setState(() => _jpHasSpouse = v),
+                                ),
+                                FilterChip(
+                                  label: Text(strings.t('first_year')),
+                                  selected: _jpIsFirstYear,
+                                  onSelected: (v) => setState(() => _jpIsFirstYear = v),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              strings.t('jpn_note'),
+                              style: const TextStyle(fontSize: 12, color: Colors.black54),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: contentWidth,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        onPressed: () {
+                          _calculate();
+                        },
+                        icon: const Icon(Icons.calculate),
+                        label: Text(strings.t('calculate')),
                       ),
                     ),
                     const SizedBox(height: 16),
                     SizedBox(
                       width: contentWidth,
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            textStyle: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          onPressed: () {
-                            _calculate();
-                          },
-                          icon: const Icon(Icons.calculate),
-                          label: const Text('开始计算'),
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: contentWidth,
-                      child: _sectionCard(
-                        title: '结果',
+                      child: SectionCard(
+                        title: strings.t('result'),
                         children: [
                           Wrap(
                             spacing: 12,
                             runSpacing: 12,
                             children: [
                               _fieldBox(
-                                _statCard(
-                                  label: _useCumulative ? '本月税后' : '税后工资',
+                                StatCard(
+                                  label: _country == Country.china
+                                      ? (_useCumulative
+                                          ? strings.t('net_month')
+                                          : strings.t('net'))
+                                      : strings.t('net_year'),
                                   value: _formatCurrency(_net),
                                   color: colorScheme.primary,
                                 ),
                                 fieldWidth,
                               ),
                               _fieldBox(
-                                _statCard(
-                                  label: _useCumulative ? '本月应扣个税' : '个税',
+                                StatCard(
+                                  label: _country == Country.china
+                                      ? (_useCumulative
+                                          ? strings.t('tax_month')
+                                          : strings.t('tax'))
+                                      : strings.t('income_tax'),
                                   value: _formatCurrency(_tax),
                                   color: Colors.deepOrange,
                                 ),
                                 fieldWidth,
                               ),
                               _fieldBox(
-                                _statCard(
-                                  label: '五险一金',
+                                StatCard(
+                                  label: _country == Country.china
+                                      ? strings.t('insurance_total')
+                                      : strings.t('insurance_total'),
                                   value: _formatCurrency(totalInsurance),
                                   color: Colors.teal,
                                 ),
@@ -583,18 +697,69 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
                           const SizedBox(height: 12),
                           const Divider(),
                           const SizedBox(height: 8),
-                          _resultTile(_useCumulative ? '本月税前工资' : '税前工资', _format(_gross)),
-                          _resultTile('养老', _format(_pension)),
-                          _resultTile('医疗', _format(_medical)),
-                          _resultTile('失业', _format(_unemployment)),
-                          _resultTile('公积金', _format(_housingFund)),
-                          if (_useCumulative)
-                            _resultTile('累计应纳税所得额', _format(_cumulativeTaxable)),
-                          _resultTile(_useCumulative ? '本月计税收入' : '计税收入', _format(_taxableIncome)),
-                          if (_useCumulative)
-                            _resultTile('累计应纳税额', _format(_cumulativeTax)),
-                          _resultTile(_useCumulative ? '本月应扣个税' : '个税', _format(_tax)),
-                          _resultTile(_useCumulative ? '本月税后' : '税后工资', _format(_net)),
+                          ResultTile(
+                            label: _country == Country.china
+                                ? (_useCumulative ? strings.t('gross_month') : strings.t('gross'))
+                                : strings.t('jpn_income'),
+                            value: _format(_gross),
+                          ),
+                          ResultTile(
+                            label: _country == Country.china
+                                ? strings.t('pension')
+                                : strings.t('pension_jp'),
+                            value: _format(_pension),
+                          ),
+                          ResultTile(
+                            label: _country == Country.china
+                                ? strings.t('medical')
+                                : strings.t('health_jp'),
+                            value: _format(_medical),
+                          ),
+                          ResultTile(
+                            label: _country == Country.china
+                                ? strings.t('unemployment')
+                                : strings.t('employment_jp'),
+                            value: _format(_unemployment),
+                          ),
+                          ResultTile(
+                            label: _country == Country.china
+                                ? strings.t('housing')
+                                : strings.t('care_jp'),
+                            value: _format(_housingFund),
+                          ),
+                          if (_country == Country.china && _useCumulative)
+                            ResultTile(
+                              label: strings.t('cumulative_taxable'),
+                              value: _format(_cumulativeTaxable),
+                            ),
+                          ResultTile(
+                            label: _country == Country.china
+                                ? (_useCumulative ? strings.t('taxable_month') : strings.t('taxable'))
+                                : strings.t('taxable'),
+                            value: _format(_taxableIncome),
+                          ),
+                          if (_country == Country.china && _useCumulative)
+                            ResultTile(
+                              label: strings.t('cumulative_tax'),
+                              value: _format(_cumulativeTax),
+                            ),
+                          if (_country == Country.japan)
+                            ResultTile(
+                              label: strings.t('resident_tax'),
+                              value: _format(_residentTax),
+                            ),
+                          ResultTile(
+                            label: _country == Country.china
+                                ? (_useCumulative ? strings.t('tax_month') : strings.t('tax'))
+                                : strings.t('income_tax'),
+                            value: _format(_tax),
+                          ),
+                          ResultTile(
+                            label: _country == Country.china
+                                ? (_useCumulative ? strings.t('net_month') : strings.t('net'))
+                                : strings.t('net_year'),
+                            value: _format(_net),
+                          ),
                         ],
                       ),
                     ),
@@ -608,40 +773,16 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
     );
   }
 
-  Widget _sectionCard({required String title, required List<Widget> children}) {
-    return Card(
-      elevation: 1,
-      color: Colors.white,
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 12),
-            ...children,
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _monthRow(int index, double contentWidth) {
     final data = _monthControllers[index];
+    final strings = Strings(_locale);
     final isWide = contentWidth > 640;
     final fieldWidth = isWide ? (contentWidth - 12) / 2 : contentWidth;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '${index + 1}月',
+          _locale == AppLocale.zh ? '${index + 1}月' : 'Month ${index + 1}',
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 8),
@@ -651,34 +792,34 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
           children: [
             _fieldBox(
               LabeledNumberField(
-                label: '税前收入',
+                label: strings.t('month_income'),
                 controller: data.salary,
-                suffix: '元',
+                suffix: _locale == AppLocale.zh ? '元' : '',
                 onChanged: (v) => _onMonthSalaryChanged(index, v),
               ),
               fieldWidth,
             ),
             _fieldBox(
               LabeledNumberField(
-                label: '社保基数',
+                label: strings.t('month_social_base'),
                 controller: data.socialBase,
-                suffix: '元',
+                suffix: _locale == AppLocale.zh ? '元' : '',
               ),
               fieldWidth,
             ),
             _fieldBox(
               LabeledNumberField(
-                label: '公积金基数',
+                label: strings.t('month_fund_base'),
                 controller: data.fundBase,
-                suffix: '元',
+                suffix: _locale == AppLocale.zh ? '元' : '',
               ),
               fieldWidth,
             ),
             _fieldBox(
               LabeledNumberField(
-                label: '专项附加/其他扣除',
+                label: strings.t('month_extra'),
                 controller: data.extraDeduction,
-                suffix: '元',
+                suffix: _locale == AppLocale.zh ? '元' : '',
               ),
               fieldWidth,
             ),
@@ -687,126 +828,9 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
       ],
     );
   }
-
-  Widget _resultTile(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label),
-          Text(
-            value,
-            style: const TextStyle(fontFeatures: [FontFeature.tabularFigures()]),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statCard(
-      {required String label, required String value, required Color color}) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.25)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: color.withOpacity(0.9),
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _fieldBox(Widget child, double width) {
     return SizedBox(width: width, child: child);
   }
 
   String _formatCurrency(double value) => '¥${_format(value)}';
-}
-
-class _MonthControllers {
-  _MonthControllers({
-    required this.salary,
-    required this.socialBase,
-    required this.fundBase,
-    required this.extraDeduction,
-  });
-
-  final TextEditingController salary;
-  final TextEditingController socialBase;
-  final TextEditingController fundBase;
-  final TextEditingController extraDeduction;
-
-  void dispose() {
-    salary.dispose();
-    socialBase.dispose();
-    fundBase.dispose();
-    extraDeduction.dispose();
-  }
-}
-
-class LabeledNumberField extends StatelessWidget {
-  const LabeledNumberField({
-    super.key,
-    required this.label,
-    required this.controller,
-    this.suffix,
-    this.helper,
-    this.onChanged,
-  });
-
-  final String label;
-  final TextEditingController controller;
-  final String? suffix;
-  final String? helper;
-  final ValueChanged<String>? onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      onChanged: onChanged,
-      decoration: InputDecoration(
-        labelText: label,
-        helperText: helper,
-        suffixText: suffix,
-        floatingLabelBehavior: FloatingLabelBehavior.always,
-        filled: true,
-        fillColor: Colors.grey.shade50,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
-      ),
-    );
-  }
-}
-
-class _TaxBracket {
-  const _TaxBracket(this.limit, this.rate, this.quickDeduction);
-
-  final double limit;
-  final double rate;
-  final double quickDeduction;
 }
