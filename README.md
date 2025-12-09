@@ -1,16 +1,24 @@
-# salary_calculate
+# 工资计算器（中国个税/五险一金）
 
-A new Flutter project.
+Flutter 实现的工资计算工具，支持：
+- 五险一金个人缴费（可调基数与比例）
+- 专项附加扣除（租房、子女教育等可汇总为月度金额）
+- 计算模式切换：单月估算 / 累计预扣（全年，按年度速算扣除表）
+- 月度明细：工资、社保、公积金、专项附加可逐月调整，支持一键填充
+- 结果展示：本月税后、本月个税、累计应纳税所得额/累计税额等
 
-## Getting Started
+## 本地运行
+```bash
+flutter pub get
+flutter run -d web-server --web-port 8000  # Web 调试
+# 或真机/模拟器：
+flutter run
+```
 
-This project is a starting point for a Flutter application.
+## 打包
+- Web：`flutter build web`
+- Android APK：`flutter build apk --release`（产物位于 `build/app/outputs/flutter-apk/app-release.apk`）
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 计算逻辑概要
+- 单月模式：按月度档位（3k/12k/...）计算个税。
+- 累计模式：累计收入、累计五险一金、累计专项附加、累计基础扣除（5000×月数）得到累计应纳税所得额，使用年度档位（36k/144k/...）+ 速算扣除数计算累计税额，当月个税为本期累计税额与上期累计税额之差。所有税额按分四舍五入。
