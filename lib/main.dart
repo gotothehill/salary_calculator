@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import 'calculators.dart';
 import 'i18n.dart';
@@ -9,6 +10,8 @@ import 'widgets.dart';
 enum Country { china, japan }
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  MobileAds.instance.initialize();
   runApp(const SalaryApp());
 }
 
@@ -49,6 +52,15 @@ class SalaryApp extends StatelessWidget {
   }
 }
 
+class _AdIds {
+  // Toggle to true if you want to force AdMob test ads for verification.
+  static const bool useTestIds = false;
+  static const _bannerTest = 'ca-app-pub-3940256099942544/6300978111';
+  static const _bannerLive = 'ca-app-pub-7401147221611931/5783762339'; // Android banner (live)
+
+  static String get banner => useTestIds ? _bannerTest : _bannerLive;
+}
+
 class SalaryCalculatorPage extends StatefulWidget {
   const SalaryCalculatorPage({super.key});
 
@@ -78,6 +90,8 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
   bool _jpHasSpouse = false;
   bool _jpIsFirstYear = true;
   AppLocale _locale = AppLocale.zh;
+  BannerAd? _bannerAd;
+  bool _bannerLoaded = false;
 
   double _gross = 0;
   double _taxableIncome = 0;
@@ -105,6 +119,7 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
         extraDeduction: TextEditingController(text: '0'),
       ),
     );
+    _loadBanner();
   }
 
   @override
@@ -121,6 +136,7 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
     _jpAnnualSalaryController.dispose();
     _jpAgeController.dispose();
     _jpDependentsController.dispose();
+    _bannerAd?.dispose();
     for (final month in _monthControllers) {
       month.dispose();
     }
@@ -133,6 +149,32 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
     } else {
       _calculateChina();
     }
+  }
+
+  void _loadBanner() {
+    final banner = BannerAd(
+      size: AdSize.banner,
+      adUnitId: _AdIds.banner,
+      listener: BannerAdListener(
+        onAdLoaded: (ad) {
+          debugPrint('Banner loaded');
+          setState(() {
+            _bannerAd = ad as BannerAd;
+            _bannerLoaded = true;
+          });
+        },
+        onAdFailedToLoad: (ad, error) {
+          debugPrint('Banner failed to load: $error');
+          ad.dispose();
+          setState(() {
+            _bannerAd = null;
+            _bannerLoaded = false;
+          });
+        },
+      ),
+      request: const AdRequest(),
+    );
+    banner.load();
   }
 
   void _calculateChina() {
@@ -760,6 +802,17 @@ class _SalaryCalculatorPageState extends State<SalaryCalculatorPage> {
                                 : strings.t('net_year'),
                             value: _format(_net),
                           ),
+                          const SizedBox(height: 12),
+                          if (_bannerAd != null && _bannerLoaded)
+                            Center(
+                              child: SizedBox(
+                                width: _bannerAd!.size.width.toDouble(),
+                                height: _bannerAd!.size.height.toDouble(),
+                                child: AdWidget(ad: _bannerAd!),
+                              ),
+                            )
+                          else
+                            SizedBox(height: AdSize.banner.height.toDouble()),
                         ],
                       ),
                     ),

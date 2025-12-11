@@ -1,6 +1,10 @@
 allprojects {
     repositories {
         google()
+        maven { url = uri("https://dl.google.com/dl/android/maven2") }
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/central") }
+        maven { url = uri("https://mirrors.cloud.tencent.com/gradle/") }
         mavenCentral()
     }
 }
