@@ -1,4 +1,4 @@
-package com.example.salary_calculate
+package com.genimous.salarycalculator
 
 import io.flutter.embedding.android.FlutterActivity
 
